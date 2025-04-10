@@ -1,0 +1,91 @@
+body, html {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: Arial, sans-serif;
+}
+
+#map {
+    height: 100vh;
+    width: 100%;
+}
+
+.info {
+    padding: 6px 8px;
+    background: white;
+    background: rgba(255,255,255,0.8);
+    box-shadow: 0 0 15px rgba(0,0,0,0.2);
+    border-radius: 5px;
+    max-width: 250px;
+}
+
+.info h3 {
+    margin: 0 0 5px;
+    color: #555;
+}
+
+.info h4 {
+    margin: 0 0 5px;
+    color: #777;
+}
+
+.legend {
+    line-height: 18px;
+    color: #555;
+}
+
+.legend i {
+    width: 18px;
+    height: 18px;
+    float: left;
+    margin-right: 8px;
+    opacity: 0.7;
+}
+
+.district-summary {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.district-summary table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.district-summary th, .district-summary td {
+    border: 1px solid #ddd;
+    padding: 4px 8px;
+    text-align: left;
+}
+
+.district-summary th {
+    background-color: #f2f2f2;
+}
+
+.filter-options {
+    margin-top: 10px;
+}
+
+.filter-options label {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.filter-options select {
+    width: 100%;
+    padding: 4px;
+    margin-bottom: 5px;
+}
+
+.filter-options button {
+    width: 100%;
+    padding: 6px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+.filter-options button:hover {
+    background-color: #45a049;
+}

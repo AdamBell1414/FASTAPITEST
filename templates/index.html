@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fall Armyworm Detection Map - Uganda</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        .info {
+            padding: 6px 8px;
+            background: white;
+            background: rgba(255,255,255,0.8);
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            border-radius: 5px;
+        }
+        .info h4 {
+            margin: 0 0 5px;
+            color: #777;
+        }
+        .legend {
+            line-height: 18px;
+            color: #555;
+        }
+        .legend i {
+            width: 18px;
+            height: 18px;
+            float: left;
+            margin-right: 8px;
+            opacity: 0.7;
+        }
+        .district-summary {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .district-summary table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        .district-summary th, .district-summary td {
+            border: 1px solid #ddd;
+            padding: 4px 8px;
+            text-align: left;
+        }
+        .district-summary th {
+            background-color: #f2f2f2;
+        }
+        .filter-options {
+            margin-top: 10px;
+        }
+        .filter-options label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .filter-options select {
+            width: 100%;
+            padding: 4px;
+            margin-bottom: 5px;
+        }
+        .filter-options button {
+            width: 100%;
+            padding: 6px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .filter-options button:hover {
+            background-color: #45a049;
+        }
+        .location-button {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            background-color: white;
+            border: 2px solid rgba(0,0,0,0.2);
+            border-radius: 4px;
+            padding: 5px;
+            cursor: pointer;
+        }
+        .location-button img {
+            width: 30px;
+            height: 30px;
+        }
+        .user-location {
+            background-color: #2196F3;
+            border: 2px solid white;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <button id="locate-me" class="location-button" title="Show my location">
+        <img src="https://cdn-icons-png.flaticon.com/512/25/25613.png" alt="Location">
+    </button>
+    
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        // Define Uganda's bounds
+        const ugandaSW = L.latLng(-1.5, 29.5);  // Southwest corner
+        const ugandaNE = L.latLng(4.2, 35.0);   // Northeast corner
+        const ugandaBounds = L.latLngBounds(ugandaSW, ugandaNE);
+
+        // Initialize the map centered on Uganda with restricted bounds
+        const map = L.map('map', {
+            center: [1.3733, 32.2903],
+            zoom: 7,
+            maxBounds: ugandaBounds.pad(0.1), // Add a small padding (10%) to the bounds
+            minZoom: 6,
+            maxZoom: 18
+        });
+
+        // Restrict panning to Uganda's bounds
+        map.on('drag', function() {
+            map.panInsideBounds(ugandaBounds, { animate: false });
+        });
+
+        // Add tile layer (using OpenStreetMap)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            bounds: ugandaBounds
+        }).addTo(map);
+
+        // Add a border to highlight Uganda's approximate borders
+        const ugandaOutline = L.rectangle(ugandaBounds, {
+            color: "#3388ff",
+            weight: 2,
+            fill: false,
+            fillOpacity: 0.1
+        }).addTo(map);
+
+        // Add a title to the map
+        const title = L.control({position: 'topleft'});
+        title.onAdd = function(map) {
+            const div = L.DomUtil.create('div', 'info title');
+            div.innerHTML = '<h3>Fall Armyworm Detections in Uganda</h3>';
+            return div;
+        };
+        title.addTo(map);
+
+        // Legend control
+        const legend = L.control({position: 'bottomright'});
+        legend.onAdd = function(map) {
+            const div = L.DomUtil.create('div', 'info legend');
+            const classes = {
+                'fall-armyworm-larval-damage': 'red',
+                'fall-armyworm-egg': 'orange',
+                'fall-armyworm-frass': 'yellow',
+                'healthy-maize': 'green',
+                'unknown': 'gray'
+            };
+            
+            let html = '<div><strong>Legend</strong></div>';
+            for (const key in classes) {
+                html +=
+                    '<i style="background:' + classes[key] + '"></i> ' +
+                    key.replace(/-/g, ' ') + '<br>';
+            }
+            div.innerHTML = html;
+            return div;
+        };
+        legend.addTo(map);
+
+        // Add a filter control
+        const filterControl = L.control({position: 'topright'});
+        filterControl.onAdd = function(map) {
+            const div = L.DomUtil.create('div', 'info filter-control');
+            div.innerHTML = `
+                <h4>Filter Data</h4>
+                <div class="filter-options">
+                    <label>
+                        <select id="district-filter">
+                            <option value="">All Districts</option>
+                        </select>
+                    </label>
+                    <label>
+                        <select id="class-filter">
+                            <option value="">All Classes</option>
+                            <option value="fall-armyworm-larval-damage">Larval Damage</option>
+                            <option value="fall-armyworm-egg">Eggs</option>
+                            <option value="fall-armyworm-frass">Frass</option>
+                            <option value="healthy-maize">Healthy Maize</option>
+                        </select>
+                    </label>
+                    <label>
+                        <select id="days-filter">
+                            <option value="7">Last 7 days</option>
+                            <option value="30" selected>Last 30 days</option>
+                            <option value="90">Last 90 days</option>
+                            <option value="365">Last year</option>
+                        </select>
+                    </label>
+                    <button id="apply-filter">Apply Filters</button>
+                </div>
+            `;
+            return div;
+        };
+        filterControl.addTo(map);
+
+        // Function to get color based on detection class
+        function getColor(classType) {
+            return {
+                'fall-armyworm-larval-damage': 'red',
+                'fall-armyworm-egg': 'orange',
+                'fall-armyworm-frass': 'yellow',
+                'healthy-maize': 'green'
+            }[classType] || 'gray';
+        }
+
+        // Store markers and data globally for filtering
+        let allMarkers = [];
+        let ugandaData = [];
+        let userLocationMarker = null;
+
+        // Function to reset view to Uganda bounds
+        function resetView() {
+            map.fitBounds(ugandaBounds);
+        }
+
+        // Function to handle user location
+        function locateUser() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    function(position) {
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        
+                        // Check if location is within Uganda
+                        if (lat >= ugandaSW.lat && lat <= ugandaNE.lat &&
+                            lng >= ugandaSW.lng && lng <= ugandaNE.lng) {
+                            
+                            // Remove previous marker if exists
+                            if (userLocationMarker) {
+                                map.removeLayer(userLocationMarker);
+                            }
+                            
+                            // Add user location marker
+                            userLocationMarker = L.circleMarker([lat, lng], {
+                                radius: 10,
+                                fillColor: '#2196F3',
+                                color: '#fff',
+                                weight: 2,
+                                opacity: 1,
+                                fillOpacity: 0.8,
+                                className: 'user-location'
+                            }).addTo(map);
+                            
+                            userLocationMarker.bindPopup("<b>Your Location</b>").openPopup();
+                            
+                            // Zoom to user location
+                            map.setView([lat, lng], 12);
+                        } else {
+                            alert("Your location is outside Uganda. Map view will remain unchanged.");
+                        }
+                    },
+                    function(error) {
+                        console.error("Error getting location:", error);
+                        alert("Could not get your location: " + error.message);
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 5000,
+                        maximumAge: 0
+                    }
+                );
+            } else {
+                alert("Geolocation is not supported by your browser");
+            }
+        }
+
+        // Add event listener to location button
+        document.getElementById('locate-me').addEventListener('click', locateUser);
+
+        // Fetch data from your API
+        async function loadMapData() {
+            try {
+                // Clear existing markers
+                allMarkers.forEach(marker => map.removeLayer(marker));
+                allMarkers = [];
+                
+                // Get filter values
+                const districtFilter = document.getElementById('district-filter').value;
+                const classFilter = document.getElementById('class-filter').value;
+                const daysFilter = document.getElementById('days-filter').value;
+                
+                // Build query parameters
+                let queryParams = `days=${daysFilter}`;
+                if (classFilter) queryParams += `&class=${classFilter}`;
+                if (districtFilter) queryParams += `&district=${districtFilter}`;
+                
+                // Fetch filtered data
+                const response = await fetch(`/map_data?${queryParams}`);
+                const data = await response.json();
+                
+                // Store the data
+                ugandaData = data;
+                
+                // Create a map to count detections by district
+                const districtCounts = {};
+                const classCounts = {
+                    'fall-armyworm-larval-damage': 0,
+                    'fall-armyworm-egg': 0,
+                    'fall-armyworm-frass': 0,
+                    'healthy-maize': 0,
+                    'unknown': 0
+                };
+                
+                // Add markers for each detection
+                ugandaData.forEach(detection => {
+                    // Count detections by district
+                    if (detection.district) {
+                        districtCounts[detection.district] = (districtCounts[detection.district] || 0) + 1;
+                    }
+                    
+                    // Count by class
+                    if (detection.class) {
+                        classCounts[detection.class] = (classCounts[detection.class] || 0) + 1;
+                    } else {
+                        classCounts['unknown'] = (classCounts['unknown'] || 0) + 1;
+                    }
+                    
+                    // Debug: Log the detection class and color
+                    console.log(`Detection: ${detection.result}, Class: ${detection.class}, Color: ${getColor(detection.class)}`);
+                    
+                    const marker = L.circleMarker(
+                        [detection.latitude, detection.longitude],
+                        {
+                            radius: 8,
+                            fillColor: getColor(detection.class),
+                            color: '#000',
+                            weight: 1,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        }
+                    ).addTo(map);
+                    
+                    // Create popup content with image if available
+                    let popupContent = `
+                        <b>${detection.result}</b><br>
+                        Confidence: ${detection.confidence}%<br>
+                        Class: ${detection.class || 'unknown'}<br>
+                        District: ${detection.district || 'Unknown'}<br>
+                        Date: ${new Date(detection.timestamp).toLocaleString()}
+                    `;
+                    
+                    // Add image thumbnail if available
+                    if (detection.image_path) {
+                        popupContent += `<br><img src="/${detection.image_path}" style="max-width:200px; max-height:200px; margin-top:10px;">`;
+                    }
+                    
+                    marker.bindPopup(popupContent);
+                    
+                    allMarkers.push(marker);
+                });
+                
+                // Update district summary panel
+                let districtHtml = '';
+                if (Object.keys(districtCounts).length > 0) {
+                    // Sort districts by count (highest first)
+                    const sortedDistricts = Object.entries(districtCounts)
+                        .sort((a, b) => b[1] - a[1]);
+                    
+                    districtHtml = '<table>';
+                    districtHtml += '<tr><th>District</th><th>Detections</th></tr>';
+                    sortedDistricts.forEach(([district, count]) => {
+                        districtHtml += `<tr><td>${district}</td><td>${count}</td></tr>`;
+                    });
+                    districtHtml += '</table>';
+                    
+                    // Add class summary
+                    districtHtml += '<h4>Detection Types</h4>';
+                    districtHtml += '<table>';
+                    districtHtml += '<tr><th>Type</th><th>Count</th></tr>';
+                    Object.entries(classCounts)
+                        .filter(([_, count]) => count > 0)
+                        .sort((a, b) => b[1] - a[1])
+                        .forEach(([className, count]) => {
+                            const displayName = className.replace(/-/g, ' ');
+                            districtHtml += `<tr><td>${displayName}</td><td>${count}</td></tr>`;
+                        });
+                    districtHtml += '</table>';
+                } else {
+                    districtHtml = '<p>No detections found</p>';
+                }
+                document.getElementById('district-list').innerHTML = districtHtml;
+                
+                // Load districts for filter dropdown if not already loaded
+                if (document.getElementById('district-filter').options.length <= 1) {
+                    loadDistrictOptions();
+                }
+                
+                // If we have data points, adjust the view but stay within Uganda
+                if (ugandaData.length > 0) {
+                    try {
+                        const markers = ugandaData.map(d => L.marker([d.latitude, d.longitude]));
+                        const markerGroup = L.featureGroup(markers);
+                        
+                        // Get bounds of markers but ensure they're within Uganda
+                        const dataBounds = markerGroup.getBounds();
+                        map.fitBounds(dataBounds, {
+                            padding: [50, 50],
+                            maxZoom: 10
+                        });
+                    } catch (e) {
+                        console.error("Error fitting bounds:", e);
+                        resetView();
+                    }
+                } else {
+                    // Reset to full Uganda view if no data
+                    resetView();
+                }
+            } catch (error) {
+                console.error('Error loading map data:', error);
+                document.getElementById('district-list').innerHTML = '<p>Error loading data</p>';
+            }
+        }
+
+        // Function to load district options for filter
+        async function loadDistrictOptions() {
+            try {
+                const response = await fetch('/uganda_districts');
+                const districts = await response.json();
+                
+                const districtSelect = document.getElementById('district-filter');
+                districtSelect.innerHTML = '<option value="">All Districts</option>';
+                
+                districts.forEach(district => {
+                    const option = document.createElement('option');
+                    option.value = district;
+                    option.textContent = district;
+                    districtSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading districts:', error);
+            }
+        }
+
+        // Add event listener to the filter button
+        document.getElementById('apply-filter').addEventListener('click', loadMapData);
+
+        // Load map data when the page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            loadMapData();
+            
+            // Try to get user location if available
+            if (navigator.geolocation) {
+                // Add a small delay to ensure map is fully loaded
+                setTimeout(() => {
+                    navigator.geolocation.getCurrentPosition(
+                        function(position) {
+                            const lat = position.coords.latitude;
+                            const lng = position.coords.longitude;
+                            
+                            // Check if location is within Uganda
+                            if (lat >= ugandaSW.lat && lat <= ugandaNE.lat &&
+                                lng >= ugandaSW.lng && lng <= ugandaNE.lng) {
+                                
+                                // Add user location marker
+                                userLocationMarker = L.circleMarker([lat, lng], {
+                                    radius: 10,
+                                    fillColor: '#2196F3',
+                                    color: '#fff',
+                                    weight: 2,
+                                    opacity: 1,
+                                    fillOpacity: 0.8,
+                                    className: 'user-location'
+                                }).addTo(map);
+                                
+                                userLocationMarker.bindPopup("<b>Your Location</b>");
+                            }
+                        },
+                        function(error) {
+                            console.log("Geolocation error or permission denied:", error.message);
+                        },
+                        {
+                            enableHighAccuracy: true,
+                            timeout: 5000,
+                            maximumAge: 0
+                        }
+                    );
+                }, 1000);
+            }
+        });
+    </script>
+</body>
+</html>
+
