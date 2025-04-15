@@ -366,7 +366,8 @@ def api_analytics_data():
         conn = sqlite3.connect('detections.db')
         conn.row_factory = sqlite3.Row  # This enables column access by name
         c = conn.cursor()
-            # Base query with time filter
+                
+        # Base query with time filter
         base_query = '''SELECT id, class, result, confidence, district, timestamp, latitude, longitude
                        FROM detections
                        WHERE timestamp >= datetime('now', ?)
@@ -387,19 +388,23 @@ def api_analytics_data():
         c.execute(base_query, base_params)
         detections = [dict(row) for row in c.fetchall()]
                 
-        # Calculate total detections
-        total_detections = len(detections)
+        # Calculate total detections (excluding unknown)
+        valid_detections = [d for d in detections if d['class'] != 'unknown']
+        total_detections = len(valid_detections)
                 
-        # Calculate districts affected
-        districts_affected = len(set(d['district'] for d in detections if d['district']))
+        # Calculate districts affected (based on valid detections)
+        districts_affected = len(set(d['district'] for d in valid_detections if d['district']))
                 
-        # Calculate class distribution
+        # Calculate class distribution (excluding unknown)
         class_distribution = {}
         for detection in detections:
-            detection_class = detection['class'] or 'unknown'
+            detection_class = detection['class']
+            # Skip unknown class
+            if detection_class == 'unknown':
+                continue
             class_distribution[detection_class] = class_distribution.get(detection_class, 0) + 1
                 
-        # Calculate infestation rate (excluding healthy maize)
+        # Calculate infestation rate (excluding healthy maize and unknown)
         total_classified = sum(class_distribution.values())
         infestation_count = total_classified - class_distribution.get('healthy-maize', 0)
         infestation_rate = (infestation_count / total_classified * 100) if total_classified > 0 else 0
@@ -409,21 +414,23 @@ def api_analytics_data():
         last_week_start = now - timedelta(days=7)
         previous_week_start = last_week_start - timedelta(days=7)
                 
-        # Query for last week
+        # Query for last week (excluding unknown)
         c.execute(
             '''SELECT COUNT(*) FROM detections
                 WHERE timestamp >= ? AND timestamp < ?
-               AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?''',
+               AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?
+               AND class != 'unknown' ''',
             [last_week_start.strftime('%Y-%m-%d'), now.strftime('%Y-%m-%d'),
              UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
         )
         last_week_count = c.fetchone()[0]
                 
-        # Query for previous week
+        # Query for previous week (excluding unknown)
         c.execute(
             '''SELECT COUNT(*) FROM detections
                 WHERE timestamp >= ? AND timestamp < ?
-               AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?''',
+               AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?
+               AND class != 'unknown' ''',
             [previous_week_start.strftime('%Y-%m-%d'), last_week_start.strftime('%Y-%m-%d'),
              UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
         )
@@ -446,21 +453,16 @@ def api_analytics_data():
         date_range = [(start_date + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days + 1)]
         time_series['labels'] = date_range
                 
-        # Query for daily counts by class
-        for detection_class in ['fall-armyworm-larval-damage', 'fall-armyworm-egg', 'fall-armyworm-frass', 'healthy-maize', 'unknown']:
+        # Query for daily counts by class (excluding unknown)
+        for detection_class in ['fall-armyworm-larval-damage', 'fall-armyworm-egg', 'fall-armyworm-frass', 'healthy-maize']:
             daily_counts = []
                         
             for date in date_range:
                 query = '''SELECT COUNT(*) FROM detections
                             WHERE date(timestamp) = ?
-                            AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?'''
-                params = [date, UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
-                                
-                if detection_class != 'unknown':
-                    query += ' AND class = ?'
-                    params.append(detection_class)
-                else:
-                    query += ' AND (class IS NULL OR class = "unknown")'
+                            AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?
+                            AND class = ?'''
+                params = [date, UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX, detection_class]
                                 
                 if class_filter:
                     query += ' AND class = ?'
@@ -476,7 +478,7 @@ def api_analytics_data():
                         
             time_series['data'][detection_class] = daily_counts
                 
-        # Get district counts
+        # Get district counts (excluding unknown)
         district_counts = {}
         c.execute(
             '''SELECT district, COUNT(*) as count
@@ -484,6 +486,7 @@ def api_analytics_data():
                 WHERE timestamp >= datetime('now', ?)
                 AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?
                 AND district IS NOT NULL AND district != ""
+                AND class != 'unknown'
                 GROUP BY district
                 ORDER BY count DESC''',
             [f'-{days} days', UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
@@ -491,27 +494,22 @@ def api_analytics_data():
         for row in c.fetchall():
             district_counts[row['district']] = row['count']
                 
-        # Get district-class breakdown
+        # Get district-class breakdown (excluding unknown)
         district_class_data = {}
                 
         # First, get all districts (including those with no detections)
         all_districts = list(UGANDA_DISTRICT_COORDS.keys())
         
-        # For each district, get the breakdown by class
+        # For each district, get the breakdown by class (excluding unknown)
         for district in all_districts:
             district_class_data[district] = {}
                         
-            for detection_class in ['fall-armyworm-larval-damage', 'fall-armyworm-egg', 'fall-armyworm-frass', 'healthy-maize', 'unknown']:
+            for detection_class in ['fall-armyworm-larval-damage', 'fall-armyworm-egg', 'fall-armyworm-frass', 'healthy-maize']:
                 query = '''SELECT COUNT(*) FROM detections
                             WHERE district = ? AND timestamp >= datetime('now', ?)
-                            AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?'''
-                params = [district, f'-{days} days', UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
-                                
-                if detection_class != 'unknown':
-                    query += ' AND class = ?'
-                    params.append(detection_class)
-                else:
-                    query += ' AND (class IS NULL OR class = "unknown")'
+                            AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?
+                            AND class = ?'''
+                params = [district, f'-{days} days', UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX, detection_class]
                                 
                 c.execute(query, params)
                 count = c.fetchone()[0]
@@ -537,7 +535,7 @@ def api_analytics_data():
         return jsonify(response_data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
+        
 @app.route('/api/uganda_districts', methods=['GET'])
 def api_uganda_districts():
     """API endpoint to get all Uganda districts for the Flutter app"""
