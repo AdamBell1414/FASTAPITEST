@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory
 import os
 from model_utils import detector
-from datetime import datetime
+from datetime import datetime, timedelta
 import sqlite3
 
 app = Flask(__name__)
