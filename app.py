@@ -43,23 +43,39 @@ UGANDA_DISTRICTS = [
 def detect():
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
-    
+        
     file = request.files['file']
-    
     if file.filename == '':
         return jsonify({"error": "No file selected"}), 400
-    
-    try:
-        # Get location data from request
-        latitude = request.form.get('latitude', type=float)
-        longitude = request.form.get('longitude', type=float)
-        district = request.form.get('district', type=str)
         
+    try:
+        # Get location data from request - fix parsing of form data
+        latitude = None
+        longitude = None
+        district = None
+        
+        # Try to get latitude as float
+        if 'latitude' in request.form:
+            try:
+                latitude = float(request.form['latitude'])
+            except (ValueError, TypeError):
+                pass
+                
+        # Try to get longitude as float
+        if 'longitude' in request.form:
+            try:
+                longitude = float(request.form['longitude'])
+            except (ValueError, TypeError):
+                pass
+                
+        # Get district
+        district = request.form.get('district', '')
+                
         # Check if location data is missing or invalid
         location_missing = (latitude is None or longitude is None or
                            not (UGANDA_LAT_MIN <= latitude <= UGANDA_LAT_MAX) or
                            not (UGANDA_LON_MIN <= longitude <= UGANDA_LON_MAX))
-        
+                
         # Return error if location data is missing or invalid
         if location_missing:
             return jsonify({
@@ -71,23 +87,19 @@ def detect():
                     "lon_max": UGANDA_LON_MAX
                 }
             }), 400
-        
-        # If district is not provided, set it to empty string
-        if district is None:
-            district = ""
-        
+                
         # Create uploads directory if it doesn't exist
         os.makedirs('static/uploads', exist_ok=True)
-        
+                
         # Save the file with timestamp to avoid overwriting
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{file.filename}"
         image_path = os.path.join('static/uploads', filename)
         file.save(image_path)
-        
+                
         # Run detection
         results = detector.detect(image_path)
-        
+                
         # Map the result to the correct class
         detection_class = 'unknown'
         if 'result' in results:
@@ -100,10 +112,10 @@ def detect():
                 detection_class = 'fall-armyworm-frass'
             elif 'healthy' in result_text:
                 detection_class = 'healthy-maize'
-        
+                
         # Add the class to results
         results['class'] = detection_class
-        
+                
         # Store results in database if it's a maize leaf
         if results.get('is_maize', False):
             conn = sqlite3.connect('detections.db')
@@ -115,21 +127,22 @@ def detect():
                       results['confidence'], detection_class,
                       latitude, longitude, district))
             conn.commit()
-            
+                        
             # Get the ID of the inserted record
             detection_id = c.lastrowid
             conn.close()
-            
+                        
             # Add location and ID to results
             results['latitude'] = latitude
             results['longitude'] = longitude
             results['district'] = district
             results['id'] = detection_id
             results['image_path'] = image_path
-        
+                
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route('/update_location/<int:detection_id>', methods=['POST'])
 def update_location(detection_id):
