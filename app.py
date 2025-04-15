@@ -224,6 +224,207 @@ def get_map_data():
 def map_view():
     return render_template('index.html')
 
+@app.route('/api/analytics_data', methods=['GET'])
+def api_analytics_data():
+    """API endpoint to provide data for the analytics dashboard in the Flutter app"""
+    try:
+        # Get parameters for filtering
+        days = request.args.get('days', default=30, type=int)
+        class_filter = request.args.get('class', default=None, type=str)
+        district_filter = request.args.get('district', default=None, type=str)
+        
+        # Connect to database
+        conn = sqlite3.connect('detections.db')
+        conn.row_factory = sqlite3.Row  # This enables column access by name
+        c = conn.cursor()
+        
+        # Base query with time filter
+        base_query = '''SELECT id, class, result, confidence, district, timestamp, latitude, longitude
+                       FROM detections
+                       WHERE timestamp >= datetime('now', ?)
+                       AND latitude BETWEEN ? AND ?
+                       AND longitude BETWEEN ? AND ?'''
+        base_params = [f'-{days} days', UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
+        
+        # Add optional filters
+        if class_filter:
+            base_query += ' AND class = ?'
+            base_params.append(class_filter)
+        
+        if district_filter:
+            base_query += ' AND district = ?'
+            base_params.append(district_filter)
+        
+        # Execute query to get all filtered detections
+        c.execute(base_query, base_params)
+        detections = [dict(row) for row in c.fetchall()]
+        
+        # Calculate total detections
+        total_detections = len(detections)
+        
+        # Calculate districts affected
+        districts_affected = len(set(d['district'] for d in detections if d['district']))
+        
+        # Calculate class distribution
+        class_distribution = {}
+        for detection in detections:
+            detection_class = detection['class'] or 'unknown'
+            class_distribution[detection_class] = class_distribution.get(detection_class, 0) + 1
+        
+        # Calculate infestation rate (excluding healthy maize)
+        total_classified = sum(class_distribution.values())
+        infestation_count = total_classified - class_distribution.get('healthy-maize', 0)
+        infestation_rate = (infestation_count / total_classified * 100) if total_classified > 0 else 0
+        
+        # Calculate recent trend (compare last 7 days to previous 7 days)
+        now = datetime.now()
+        last_week_start = now - timedelta(days=7)
+        previous_week_start = last_week_start - timedelta(days=7)
+        
+        # Query for last week
+        c.execute(
+            '''SELECT COUNT(*) FROM detections 
+               WHERE timestamp >= ? AND timestamp < ?
+               AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?''',
+            [last_week_start.strftime('%Y-%m-%d'), now.strftime('%Y-%m-%d'),
+             UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
+        )
+        last_week_count = c.fetchone()[0]
+        
+        # Query for previous week
+        c.execute(
+            '''SELECT COUNT(*) FROM detections 
+               WHERE timestamp >= ? AND timestamp < ?
+               AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?''',
+            [previous_week_start.strftime('%Y-%m-%d'), last_week_start.strftime('%Y-%m-%d'),
+             UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
+        )
+        previous_week_count = c.fetchone()[0]
+        
+        # Calculate percentage change
+        if previous_week_count > 0:
+            recent_trend = ((last_week_count - previous_week_count) / previous_week_count) * 100
+        else:
+            recent_trend = 0 if last_week_count == 0 else 100
+        
+        # Prepare time series data (daily counts for each class)
+        time_series = {
+            'labels': [],
+            'data': {}
+        }
+        
+        # Generate date range for the selected period
+        start_date = now - timedelta(days=days)
+        date_range = [(start_date + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days + 1)]
+        time_series['labels'] = date_range
+        
+        # Query for daily counts by class
+        for detection_class in ['fall-armyworm-larval-damage', 'fall-armyworm-egg', 'fall-armyworm-frass', 'healthy-maize', 'unknown']:
+            daily_counts = []
+            
+            for date in date_range:
+                query = '''SELECT COUNT(*) FROM detections 
+                           WHERE date(timestamp) = ? 
+                           AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?'''
+                params = [date, UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
+                
+                if detection_class != 'unknown':
+                    query += ' AND class = ?'
+                    params.append(detection_class)
+                else:
+                    query += ' AND class IS NULL'
+                
+                if class_filter:
+                    query += ' AND class = ?'
+                    params.append(class_filter)
+                
+                if district_filter:
+                    query += ' AND district = ?'
+                    params.append(district_filter)
+                
+                c.execute(query, params)
+                count = c.fetchone()[0]
+                daily_counts.append(count)
+            
+            time_series['data'][detection_class] = daily_counts
+        
+        # Get district counts
+        district_counts = {}
+        c.execute(
+            '''SELECT district, COUNT(*) as count 
+               FROM detections 
+               WHERE timestamp >= datetime('now', ?) 
+               AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?
+               GROUP BY district 
+               ORDER BY count DESC''',
+            [f'-{days} days', UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
+        )
+        for row in c.fetchall():
+            if row['district']:  # Skip null districts
+                district_counts[row['district']] = row['count']
+        
+        # Get district-class breakdown
+        district_class_data = {}
+        
+        # First, get the top districts by total count
+        top_districts = list(district_counts.keys())[:10]  # Top 10 districts
+        
+        # For each top district, get the breakdown by class
+        for district in top_districts:
+            district_class_data[district] = {}
+            
+            for detection_class in ['fall-armyworm-larval-damage', 'fall-armyworm-egg', 'fall-armyworm-frass', 'healthy-maize', 'unknown']:
+                query = '''SELECT COUNT(*) FROM detections 
+                           WHERE district = ? AND timestamp >= datetime('now', ?) 
+                           AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?'''
+                params = [district, f'-{days} days', UGANDA_LAT_MIN, UGANDA_LAT_MAX, UGANDA_LON_MIN, UGANDA_LON_MAX]
+                
+                if detection_class != 'unknown':
+                    query += ' AND class = ?'
+                    params.append(detection_class)
+                else:
+                    query += ' AND class IS NULL'
+                
+                c.execute(query, params)
+                count = c.fetchone()[0]
+                
+                if count > 0:  # Only include non-zero counts
+                    district_class_data[district][detection_class] = count
+        
+        # Close database connection
+        conn.close()
+        
+        # Prepare response data
+        response_data = {
+            'total_detections': total_detections,
+            'districts_affected': districts_affected,
+            'infestation_rate': round(infestation_rate, 1),
+            'recent_trend': round(recent_trend, 1),
+            'class_distribution': class_distribution,
+            'time_series': time_series,
+            'district_counts': district_counts,
+            'district_class_data': district_class_data
+        }
+        
+        return jsonify(response_data)
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/uganda_districts', methods=['GET'])
+def api_uganda_districts():
+    """API endpoint to get all Uganda districts for the Flutter app"""
+    try:
+        conn = sqlite3.connect('detections.db')
+        c = conn.cursor()
+        c.execute('SELECT DISTINCT district FROM detections WHERE district IS NOT NULL ORDER BY district')
+        districts = [row[0] for row in c.fetchall()]
+        conn.close()
+        return jsonify(districts)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/uganda_districts', methods=['GET'])
 def uganda_districts():
     try:
